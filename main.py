@@ -5,7 +5,15 @@ import argparse
 import utils
 from tqdm import tqdm
 import torch.nn.functional as F
+import os
 
+def load_weights(filepath):
+    path = os.path.join(filepath)
+    model = torch.load(path + '_model.pt')
+    state = torch.load(path + '_model_state_dict.pt')
+    model.load_state_dict(state)
+    print('Loading weights from {}'.format(filepath))
+    return model
 
 def contrastive_loss(out_1, out_2):
     out_1 = F.normalize(out_1, dim=-1)
@@ -42,7 +50,13 @@ def train_model(model, train_loader, test_loader, train_loader_1, device, args):
         print('Epoch: {}, Loss: {}'.format(epoch + 1, running_loss))
         auc, _ = get_score(model, device, train_loader, test_loader)
         print('Epoch: {}, AUROC is: {}'.format(epoch + 1, auc))
+    torch.save(model, args.filepath + '_model.pt')
+    torch.save(model.state_dict(), args.filepath + '_model_state_dict.pt')
 
+def test_model(model, train_loader, test_loader, device, args):
+    model.eval()
+    auc, _ = get_score(model, device, train_loader, test_loader)
+    print('Epoch: {}, AUROC is: {}'.format(0, auc))
 
 def run_epoch(model, train_loader, optimizer, center, device, is_angular):
     total_loss, total_num = 0.0, 0
@@ -99,14 +113,23 @@ def get_score(model, device, train_loader, test_loader):
 
 def main(args):
     print('Dataset: {}, Normal Label: {}, LR: {}'.format(args.dataset, args.label, args.lr))
+    os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    filepath = args.load_path + str(args.backbone)+'_'+str(args.dataset)+'_'+str(args.label)
     print(device)
-    model = utils.Model(args.backbone)
-    model = model.to(device)
-
     train_loader, test_loader, train_loader_1 = utils.get_loaders(dataset=args.dataset, label_class=args.label, batch_size=args.batch_size, backbone=args.backbone)
-    train_model(model, train_loader, test_loader, train_loader_1, device, args)
 
+    if args.mode == 'train':
+        model = utils.Model(args.backbone)
+        model = model.to(device)    
+        args.filepath = filepath
+        os.makedirs(args.save_path, exist_ok=True)
+        train_model(model, train_loader, test_loader, train_loader_1, device, args)
+
+    elif args.mode == 'test':
+        model = load_weights(filepath)
+        model = model.to(device)
+        test_model(model, train_loader, test_loader, device, args)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='')
@@ -117,5 +140,10 @@ if __name__ == "__main__":
     parser.add_argument('--batch_size', default=64, type=int)
     parser.add_argument('--backbone', default=152, type=int, help='ResNet 18/152')
     parser.add_argument('--angular', action='store_true', help='Train with angular center loss')
+    parser.add_argument('--gpu', default='0', type=str, help='gpu number')
+    parser.add_argument('--mode', default='train', type=str, help='train/test mode')
+    parser.add_argument('--save_path', default='./models/', type=str, help='where to save the weights')
+    parser.add_argument('--load_path', default='./models/', type=str, help='where to get the weights')
+
     args = parser.parse_args()
     main(args)
